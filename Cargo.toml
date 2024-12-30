@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 base64 = "0.22.1"
+soroban-cli = "22.0.4"
+tokio = { version = "1.0", features = ["full", "test-util"] }
+sha2 = "0.10.8"
