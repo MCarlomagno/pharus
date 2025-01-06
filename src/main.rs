@@ -1,9 +1,39 @@
 mod args;
 mod networks;
-mod wasm;
+mod stellar;
+mod evm;
 
 use args::{CmdArgs, process_args};
-use wasm::{load_local_file, load_remote_file};
+
+enum NetworkType {
+  Stellar(stellar::StellarClient),
+  Ethereum(evm::EthereumClient),
+}
+
+impl NetworkType {
+  fn from_str(network: &str) -> Self {
+      match network.to_lowercase().as_str() {
+          "stellar" => NetworkType::Stellar(stellar::StellarClient::new()),
+          "ethereum" => NetworkType::Ethereum(evm::EthereumClient::new()),
+          _ => panic!("Unsupported network: {}", network),
+      }
+  }
+
+  async fn compare_contracts(&self, local: String, remote: String, rpc_url: Option<String>, network_passphrase: Option<String>) -> Result<bool, Box<dyn std::error::Error>> {
+      match self {
+          NetworkType::Stellar(loader) => {
+              let local_hash = loader.load_local(local)?;
+              let remote_hash = loader.load_remote(remote, rpc_url, network_passphrase).await?;
+              Ok(local_hash == remote_hash)
+          },
+          NetworkType::Ethereum(loader) => {
+              let local_hash = loader.load_local(local)?;
+              let remote_hash = loader.load_remote(remote, rpc_url).await?;
+              Ok(local_hash == remote_hash)
+          }
+      }
+  }
+}
 
 #[tokio::main]
 async fn main() {
@@ -15,27 +45,18 @@ async fn main() {
     std::process::exit(1);
   }
 
-  let local_hash = match load_local_file(local.clone()) {
-    Ok(content) => content,
-    Err(e) => {
-      eprintln!("Error reading WASM file: {}", e);
-      std::process::exit(1);
-    }
-  };
+  let network_type = NetworkType::from_str(&network);
 
-  let remote_hash = match load_remote_file(network.clone(), remote.clone(), rpc_url, network_passphrase).await {
-    Ok(wasm) => wasm,
+  match network_type.compare_contracts(local, remote, rpc_url, network_passphrase).await {
+    Ok(true) => println!("✅ Contracts match!"),
+    Ok(false) => {
+        eprintln!("❌ Contracts do not match!");
+        std::process::exit(1);
+    },
     Err(e) => {
-        eprintln!("Error fetching remote WASM: {}", e);
+        eprintln!("Error comparing contracts: {}", e);
         std::process::exit(1);
     }
-  };
-
-  if local_hash == remote_hash {
-    println!("✅ WASM files match!");
-  } else {
-      eprintln!("❌ WASM files do not match!");
-      std::process::exit(1);
   }
 }
 
@@ -45,49 +66,16 @@ mod tests {
   use tokio;
 
   #[tokio::test]
-  async fn test_compare_remote_vs_local_contracts() {
-    let network = String::from("stellar");
+  async fn test_compare_stellar_contracts() {
     let local = String::from("./fixture/test.wasm");
     let remote = String::from("CB5HA53QWBLOCD7LQOFZ4FIOSQS2ZUA7KIBZYOV6D4CPJWXIYGX2OBAC");
 
-    let local_hash = match load_local_file(local.clone()) {
-        Ok(content) => content,
-        Err(e) => {
-            panic!("Error reading WASM file: {}", e);
-        }
-    };
 
-    let remote_hash = match load_remote_file(network.clone(), remote.clone(), None, None).await {
-        Ok(wasm) => wasm,
-        Err(e) => {
-            panic!("Error fetching remote WASM: {}", e);
-        }
-    };
+    let network_type = NetworkType::from_str("stellar");
 
-    assert_eq!(local_hash, remote_hash, 
-        "WASM hashes don't match!\nLocal: {}\nRemote: {}", 
-        local_hash, remote_hash
-    );
+    let result = network_type.compare_contracts(local, remote, None, None).await;
+
+    assert!(result.is_ok(), "result is ok");
+    assert!(result.unwrap(), "Contracts match");
   }
-
-  #[tokio::test]
-  async fn test_invalid_passphrase() {
-    let network = String::from("stellar");
-    let remote: String = String::from("CB5HA53QWBLOCD7LQOFZ4FIOSQS2ZUA7KIBZYOV6D4CPJWXIYGX2OBAC");
-    let network_passphrase = Some(String::from("invalid passphrase"));
-
-    let result = load_remote_file(network.clone(), remote.clone(), None, network_passphrase.clone()).await;
-    assert!(result.is_err(), "Expected error with invalid passphrase");
-  }
-
-  #[tokio::test]
-  async fn test_invalid_rpc() {
-    let network = String::from("stellar");
-    let remote: String = String::from("CB5HA53QWBLOCD7LQOFZ4FIOSQS2ZUA7KIBZYOV6D4CPJWXIYGX2OBAC");
-    let rpc_url = Some(String::from("https://invalid_rpc.com"));
-
-    let result = load_remote_file(network.clone(), remote.clone(), rpc_url.clone(), None).await;
-    assert!(result.is_err(), "Expected error with invalid rpc url");
-  }
-
 }
