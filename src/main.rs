@@ -17,9 +17,10 @@ enum NetworkType {
 impl NetworkType {
   fn from_network(network: Network) -> Self {
     match network {
-      Network::Stellar => NetworkType::Stellar(stellar::StellarClient::new()),
+      Network::Stellar => NetworkType::Stellar(stellar::StellarClient::new(network)),
       Network::Ethereum => NetworkType::Evm(evm::EthereumClient::new(network)),
       Network::Sepolia => NetworkType::Evm(evm::EthereumClient::new(network)),
+      Network::StellarTestnet => NetworkType::Stellar(stellar::StellarClient::new(network)),
     }
   }
 
@@ -95,6 +96,21 @@ mod tests {
     let local = String::from("./fixture/artifact.wasm");
     let remote = String::from("CB5HA53QWBLOCD7LQOFZ4FIOSQS2ZUA7KIBZYOV6D4CPJWXIYGX2OBAC");
     let network = Network::Stellar;
+    let rpc_url = String::from(network.get_default_rpc().unwrap());
+    let network_passphrase = Some(String::from(network.get_network_passphrase().unwrap()));
+    let network_type = NetworkType::from_network(network);
+
+    let result = network_type.compare_contracts(local, remote, rpc_url, network_passphrase, None, None).await;
+
+    assert!(result.is_ok(), "result is ok");
+    assert!(result.unwrap(), "Contracts match");
+  }
+
+  #[tokio::test]
+  async fn test_compare_stellar_testnet_contracts() {
+    let local = String::from("./fixture/artifact-testnet.wasm");
+    let remote = String::from("CCHXQJ5YDCIRGCBUTLC5BF2V2DKHULVPTQJGD4BAHW46JQWVRQNGA2LU");
+    let network = Network::StellarTestnet;
     let rpc_url = String::from(network.get_default_rpc().unwrap());
     let network_passphrase = Some(String::from(network.get_network_passphrase().unwrap()));
     let network_type = NetworkType::from_network(network);
