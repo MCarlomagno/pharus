@@ -48,17 +48,8 @@ pub fn process_args() -> CmdArgs {
       }
       "--network" => {
         if i + 1 < args.len() {
-            let network_arg = args[i + 1].to_lowercase();
-            match network_arg.as_str() {
-                "stellar" | "ethereum" => {
-                    network = network_arg;
-                    i += 2;
-                }
-                _ => {
-                    eprintln!("Error: Invalid network. Must be 'stellar' or 'ethereum'");
-                    std::process::exit(1);
-                }
-            }
+          network = args[i + 1].clone().to_lowercase();
+          i += 2;
         }
       }
       "--contract-path" => {

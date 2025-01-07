@@ -54,7 +54,7 @@ async fn main() {
 
   if local.is_empty() || remote.is_empty() || network.is_empty() {
     eprintln!("Error: Missing required arguments");
-    eprintln!("Usage: program --network <stellar|mainnet> --local <local_path_to_wasm> --remote <contract_address> [--rpc-url <rpc-url> --network_passphrase <network-passphrase> --contract_path <path/to/Contract.sol> --contract_name <Contract>]");
+    eprintln!("Usage: program --network <network> --local <local_path_to_artifact> --remote <contract_address> [--rpc-url <rpc-url> --network_passphrase <network-passphrase> --contract_path <path/to/Contract.sol> --contract_name <Contract>]");
     std::process::exit(1);
   }
 
