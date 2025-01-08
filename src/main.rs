@@ -1,139 +1,208 @@
-mod args;
 mod networks;
 mod stellar;
 mod evm;
+mod contract;
 
-use args::{CmdArgs, process_args};
-use networks::Network;
-use stellar::StellarClient;
-use evm::EthereumClient;
+use clap::Parser;
+use contract::{ContractComparator, ContractLoader};
+use networks::{NetworkKind, Network};
+use evm::EvmLoader;
+use stellar::StellarLoader;
 
-#[derive(Debug)]
-enum NetworkType {
-    Stellar(StellarClient),
-    Evm(EthereumClient),
-}
-
-impl NetworkType {
-  fn from_network(network: Network) -> Self {
-    match network {
-      Network::Stellar => NetworkType::Stellar(stellar::StellarClient::new(network)),
-      Network::Ethereum => NetworkType::Evm(evm::EthereumClient::new(network)),
-      Network::Sepolia => NetworkType::Evm(evm::EthereumClient::new(network)),
-      Network::StellarTestnet => NetworkType::Stellar(stellar::StellarClient::new(network)),
-    }
-  }
-
-  async fn compare_contracts(
-    &self,
+#[derive(Parser, Debug)]
+#[command(author, version, about)]
+struct Args {
+    #[arg(long)]
     local: String,
+    
+    #[arg(long)]
     remote: String,
-    rpc_url: String,
+    
+    #[arg(long)]
+    network: String,
+    
+    #[arg(long)]
+    rpc_url: Option<String>,
+    
+    #[arg(long)]
     network_passphrase: Option<String>,
+    
+    #[arg(long)]
     contract_path: Option<String>,
-    contract_name: Option<String>
-  ) -> Result<bool, Box<dyn std::error::Error>> {
-    match self {
-      NetworkType::Stellar(loader) => {
-        let local_hash = loader.load_local(local)?;
-        let remote_hash = loader.load_remote(remote, rpc_url, network_passphrase).await?;
-        Ok(local_hash == remote_hash)
-      },
-      NetworkType::Evm(loader) => {
-        let contract_path = contract_path.expect("contract_path must be specified");
-        let contract_name = contract_name.expect("contract_name must be specified");
-        let local_hash = loader.load_local(local, contract_path, contract_name)?;
-        let remote_hash = loader.load_remote(remote, rpc_url).await?;
-        Ok(local_hash == remote_hash)
-      },
-    }
-  }
+    
+    #[arg(long)]
+    contract_name: Option<String>,
 }
+
 #[tokio::main]
-async fn main() {
-  let CmdArgs { local, remote, network, rpc_url, network_passphrase, contract_name, contract_path} = process_args();
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
 
-  if local.is_empty() || remote.is_empty() || network.is_empty() {
-    eprintln!("Error: Missing required arguments");
-    eprintln!("Usage: program --network <network> --local <local_path_to_artifact> --remote <contract_address> [--rpc-url <rpc-url> --network_passphrase <network-passphrase> --contract_path <path/to/Contract.sol> --contract_name <Contract>]");
-    std::process::exit(1);
-  }
+    // Create network configuration
+    let network = match args.network.as_str() {
+        "ethereum" => Network::ethereum(),
+        "stellar" => Network::stellar(),
+        name => Network::custom_evm(
+            name.to_string(),
+            args.rpc_url.clone(),
+        ),
+    };
 
-  let network = Network::from_str(&network).expect("Unsupported network");
+    // Get RPC URL
+    let rpc_url = args.rpc_url
+        .or_else(|| network.default_rpc.clone())
+        .ok_or("No RPC URL provided")?;
 
-  let rpc_url = rpc_url
-    .or_else(|| network.get_default_rpc().map(String::from))
-    .expect("No default rpc url found for provided netwrok, please include --rpc-url parameter");
-  let network_passphrase = network_passphrase.or_else(|| network.get_network_passphrase().map(String::from));
+    // Create appropriate loader based on network type
+    let loader: Box<dyn ContractLoader> = match network.kind {
+        NetworkKind::Evm => {
+            let contract_path = args.contract_path
+                .ok_or("Contract path required for EVM networks")?;
+            let contract_name = args.contract_name
+                .ok_or("Contract name required for EVM networks")?;
+            Box::new(EvmLoader::new(contract_path, contract_name))
+        }
+        NetworkKind::Stellar => {
+            Box::new(StellarLoader::new(args.network_passphrase))
+        }
+    };
 
-  if network.is_evm() && (contract_name.is_none() || contract_path.is_none()) {
-    eprintln!("Error: must provide --contract-path and --contract name for evm networks");
-    std::process::exit(1);
-  }
-  let network_type = NetworkType::from_network(network);
-
-
-  match network_type.compare_contracts(local, remote, rpc_url, network_passphrase, contract_path, contract_name).await {
-    Ok(true) => println!("✅ Contracts match!"),
-    Ok(false) => {
-      eprintln!("❌ Contracts do not match!");
-      std::process::exit(1);
-    },
-    Err(e) => {
-      eprintln!("Error comparing contracts: {}", e);
-      std::process::exit(1);
+    // Create comparator and compare contracts
+    let comparator = ContractComparator::new(loader);
+    match comparator.compare(&args.local, &args.remote, &rpc_url).await {
+        Ok(true) => println!("✅ Contracts match!"),
+        Ok(false) => {
+            eprintln!("❌ Contracts do not match!");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("Error comparing contracts: {}", e);
+            std::process::exit(1);
+        }
     }
-  }
+
+    Ok(())
 }
+
 
 #[cfg(test)]
 mod tests {
   use super::*;
   use tokio;
+  use std::str::FromStr;
+
+  const STELLAR_MAINNET_CONTRACT: &str = "CB5HA53QWBLOCD7LQOFZ4FIOSQS2ZUA7KIBZYOV6D4CPJWXIYGX2OBAC";
+  const STELLAR_TESTNET_CONTRACT: &str = "CCHXQJ5YDCIRGCBUTLC5BF2V2DKHULVPTQJGD4BAHW46JQWVRQNGA2LU";
+  const SEPOLIA_CONTRACT_ADDRESS: &str = "0x1B9ec5Cc45977927fe6707f2A02F51e1415f2052";
+  const SEPOLIA_RPC: &str = "https://ethereum-sepolia-rpc.publicnode.com";
+
+  async fn run_comparison(args: Args) -> Result<bool, Box<dyn std::error::Error>> {
+    let network = Network::from_str(&args.network)?;
+    
+    let rpc_url = args.rpc_url
+      .or_else(|| network.default_rpc.clone())
+      .ok_or("No RPC URL provided")?;
+
+    let network_passphrase = args.network_passphrase
+      .or_else(|| network.network_passphrase.clone());
+
+    let loader: Box<dyn ContractLoader> = match network.kind {
+      NetworkKind::Evm => {
+        let contract_path = args.contract_path
+          .ok_or("Contract path required for EVM networks")?;
+        let contract_name = args.contract_name
+          .ok_or("Contract name required for EVM networks")?;
+        Box::new(EvmLoader::new(contract_path, contract_name))
+      }
+      NetworkKind::Stellar => {
+        Box::new(StellarLoader::new(network_passphrase))
+      }
+    };
+
+    let comparator = ContractComparator::new(loader);
+    comparator.compare(&args.local, &args.remote, &rpc_url).await
+  }
 
   #[tokio::test]
-  async fn test_compare_stellar_contracts() {
-    let local = String::from("./fixture/artifact.wasm");
-    let remote = String::from("CB5HA53QWBLOCD7LQOFZ4FIOSQS2ZUA7KIBZYOV6D4CPJWXIYGX2OBAC");
-    let network = Network::Stellar;
-    let rpc_url = String::from(network.get_default_rpc().unwrap());
-    let network_passphrase = Some(String::from(network.get_network_passphrase().unwrap()));
-    let network_type = NetworkType::from_network(network);
+  async fn test_compare_stellar_mainnet_contracts() {
+    let args = Args {
+      local: "./fixture/artifact.wasm".to_string(),
+      remote: STELLAR_MAINNET_CONTRACT.to_string(),
+      network: "stellar".to_string(),
+      rpc_url: None,
+      network_passphrase: None,
+      contract_path: None,
+      contract_name: None,
+    };
 
-    let result = network_type.compare_contracts(local, remote, rpc_url, network_passphrase, None, None).await;
-
-    assert!(result.is_ok(), "result is ok");
-    assert!(result.unwrap(), "Contracts match");
+    let result = run_comparison(args).await;
+    assert!(result.is_ok(), "Failed to compare contracts: {:?}", result.err());
+    assert!(result.unwrap(), "Contracts should match");
   }
 
   #[tokio::test]
   async fn test_compare_stellar_testnet_contracts() {
-    let local = String::from("./fixture/artifact-testnet.wasm");
-    let remote = String::from("CCHXQJ5YDCIRGCBUTLC5BF2V2DKHULVPTQJGD4BAHW46JQWVRQNGA2LU");
-    let network = Network::StellarTestnet;
-    let rpc_url = String::from(network.get_default_rpc().unwrap());
-    let network_passphrase = Some(String::from(network.get_network_passphrase().unwrap()));
-    let network_type = NetworkType::from_network(network);
+    let args = Args {
+      local: "./fixture/artifact-testnet.wasm".to_string(),
+      remote: STELLAR_TESTNET_CONTRACT.to_string(),
+      network: "stellar-testnet".to_string(),
+      rpc_url: None,
+      network_passphrase: None, // Will use default from Network
+      contract_path: None,
+      contract_name: None,
+    };
 
-    let result = network_type.compare_contracts(local, remote, rpc_url, network_passphrase, None, None).await;
-
-    assert!(result.is_ok(), "result is ok");
-    assert!(result.unwrap(), "Contracts match");
+    let result = run_comparison(args).await;
+    assert!(result.is_ok(), "Failed to compare contracts: {:?}", result.err());
+    assert!(result.unwrap(), "Contracts should match");
   }
 
   #[tokio::test]
   async fn test_compare_evm_contracts() {
-    let local = String::from("./fixture/artifact.json");
-    let remote = String::from("0x1B9ec5Cc45977927fe6707f2A02F51e1415f2052");
-    let contract_path = Some(String::from("contracts/Box.sol"));
-    let contract_name = Some(String::from("Box"));
-    let network = Network::Sepolia;
-    let rpc_url = String::from(network.get_default_rpc().unwrap());
-    let network_type = NetworkType::from_network(network);
+    let args = Args {
+      local: "./fixture/artifact.json".to_string(),
+      remote: SEPOLIA_CONTRACT_ADDRESS.to_string(),
+      network: "sepolia".to_string(),
+      rpc_url: Some(SEPOLIA_RPC.to_string()),
+      network_passphrase: None,
+      contract_path: Some("contracts/Box.sol".to_string()),
+      contract_name: Some("Box".to_string()),
+    };
 
-    let result = network_type.compare_contracts(local.clone(), remote.clone(), rpc_url, None, contract_path, contract_name).await;
+    let result = run_comparison(args).await;
+    assert!(result.is_ok(), "Failed to compare contracts: {:?}", result.err());
+    assert!(result.unwrap(), "Contracts should match");
+  }
 
-    assert!(result.is_ok(), "result is ok");
-    assert!(result.unwrap(), "Contracts match");
+  #[tokio::test]
+  async fn test_missing_contract_info_for_evm() {
+    let args = Args {
+      local: "./fixture/artifact.json".to_string(),
+      remote: SEPOLIA_CONTRACT_ADDRESS.to_string(),
+      network: "sepolia".to_string(),
+      rpc_url: Some(SEPOLIA_RPC.to_string()),
+      network_passphrase: None,
+      contract_path: None, // Missing required field
+      contract_name: None, // Missing required field
+    };
+
+    let result = run_comparison(args).await;
+    assert!(result.is_err(), "Should fail when contract info is missing");
+  }
+
+  #[tokio::test]
+  async fn test_invalid_network() {
+    let args = Args {
+      local: "./fixture/artifact.wasm".to_string(),
+      remote: "some-address".to_string(),
+      network: "invalid-network".to_string(),
+      rpc_url: None,
+      network_passphrase: None,
+      contract_path: None,
+      contract_name: None,
+    };
+
+    let result = run_comparison(args).await;
+    assert!(result.is_err(), "Should fail with invalid network");
   }
 }

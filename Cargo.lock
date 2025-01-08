@@ -3005,7 +3005,9 @@ version = "0.1.0"
 dependencies = [
  "alloy-primitives",
  "alloy-provider",
+ "async-trait",
  "base64 0.22.1",
+ "clap",
  "hex",
  "reqwest",
  "serde_json",
