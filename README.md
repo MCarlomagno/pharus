@@ -2,7 +2,7 @@
  
 > **WARNING**: This project is experimental, expect breaking changes, this is not production ready.
 
-Pharus is a command-line tool for verifying smart contract deployments by comparing local compiled contracts with their on-chain counterparts across EVM-compatible (bytecode) and Stellar networks (wasm).
+Pharus is a tool for verifying smart contract deployments by comparing local compiled contracts with their on-chain counterparts across EVM-compatible (bytecode) and Stellar networks (wasm).
 
 ## Installation
 
