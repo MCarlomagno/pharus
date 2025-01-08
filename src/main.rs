@@ -12,76 +12,75 @@ use stellar::StellarLoader;
 #[derive(Parser, Debug)]
 #[command(author, version, about)]
 struct Args {
-    #[arg(long)]
-    local: String,
-    
-    #[arg(long)]
-    remote: String,
-    
-    #[arg(long)]
-    network: String,
-    
-    #[arg(long)]
-    rpc_url: Option<String>,
-    
-    #[arg(long)]
-    network_passphrase: Option<String>,
-    
-    #[arg(long)]
-    contract_path: Option<String>,
-    
-    #[arg(long)]
-    contract_name: Option<String>,
+  #[arg(long)]
+  local: String,
+  
+  #[arg(long)]
+  remote: String,
+  
+  #[arg(long)]
+  network: String,
+  
+  #[arg(long)]
+  rpc_url: Option<String>,
+  
+  #[arg(long)]
+  network_passphrase: Option<String>,
+  
+  #[arg(long)]
+  contract_path: Option<String>,
+  
+  #[arg(long)]
+  contract_name: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+  let args = Args::parse();
 
-    // Create network configuration
-    let network = match args.network.as_str() {
-        "ethereum" => Network::ethereum(),
-        "stellar" => Network::stellar(),
-        name => Network::custom_evm(
-            name.to_string(),
-            args.rpc_url.clone(),
-        ),
-    };
+  let network = match args.network.as_str() {
+    "ethereum" => Network::ethereum(),
+    "stellar" => Network::stellar(),
+    name => Network::custom_evm(
+      name.to_string(),
+      args.rpc_url.clone(),
+    ),
+  };
 
-    // Get RPC URL
-    let rpc_url = args.rpc_url
-        .or_else(|| network.default_rpc.clone())
-        .ok_or("No RPC URL provided")?;
+  let rpc_url = args.rpc_url
+    .or_else(|| network.default_rpc.clone())
+    .ok_or("No RPC URL provided")?;
 
-    // Create appropriate loader based on network type
-    let loader: Box<dyn ContractLoader> = match network.kind {
-        NetworkKind::Evm => {
-            let contract_path = args.contract_path
-                .ok_or("Contract path required for EVM networks")?;
-            let contract_name = args.contract_name
-                .ok_or("Contract name required for EVM networks")?;
-            Box::new(EvmLoader::new(contract_path, contract_name))
-        }
-        NetworkKind::Stellar => {
-            Box::new(StellarLoader::new(args.network_passphrase))
-        }
-    };
-
-    // Create comparator and compare contracts
-    let comparator = ContractComparator::new(loader);
-    match comparator.compare(&args.local, &args.remote, &rpc_url).await {
-        Ok(true) => println!("✅ Contracts match!"),
-        Ok(false) => {
-            eprintln!("❌ Contracts do not match!");
-            std::process::exit(1);
-        }
-        Err(e) => {
-            eprintln!("Error comparing contracts: {}", e);
-            std::process::exit(1);
-        }
+  let loader: Box<dyn ContractLoader> = match network.kind {
+    NetworkKind::Evm => {
+      let contract_path = args.contract_path
+        .ok_or("Contract path required for EVM networks")?;
+      let contract_name = args.contract_name
+        .ok_or("Contract name required for EVM networks")?;
+      Box::new(EvmLoader::new(contract_path, contract_name))
     }
+    NetworkKind::Stellar => {
+      let network_passphrase = args.network_passphrase
+        .or_else(|| network.network_passphrase.clone())
+        .ok_or("No network passphrase provided")?;
+      Box::new(StellarLoader::new(Some(network_passphrase)))
+    }
+  };
 
-    Ok(())
+  let comparator = ContractComparator::new(loader);
+  match comparator.compare(&args.local, &args.remote, &rpc_url).await {
+    Ok(true) => println!("✅ Contracts match!"),
+    Ok(false) => {
+      eprintln!("❌ Contracts do not match!");
+      std::process::exit(1);
+    }
+    Err(e) => {
+      eprintln!("Error comparing contracts: {}", e);
+      std::process::exit(1);
+    }
+  }
+
+  Ok(())
 }
 
 
